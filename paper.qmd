@@ -255,7 +255,6 @@ from shapely.ops import voronoi_diagram
 ```
 
 ```{python}
-#| include: false
 plt.rcParams["figure.figsize"] = (12, 12)
 
 CRS = "EPSG:27700"
@@ -275,6 +274,18 @@ base_armley["geometry"] = base_armley["geometry"].map(set_precision_pointone)
 base_armley = combine_line(base_armley["geometry"]).to_frame("geometry")
 armley_geometry = get_geometry_buffer(base_armley["geometry"], radius=buffer_size)
 ```
+
+::: {#fig-buffered-network layout-ncol="2"}
+```{python}
+otley_geometry.plot(edgecolor="blue", color="blue")
+```
+
+```{python}
+armley_geometry.plot(edgecolor="blue", color="blue")
+```
+
+Buffered versions of the Otley Road (left) and Armley Road (right) networks.
+:::
 
 In skeletonisation, overlapping lines are identified, buffered, transformed into a raster image, the image processed through a thinning algorithm, and a skeletal representation of the original network produced (see [Methods](https://nptscot.github.io/networkmerge/methods.html) appendix for details).
 This skeletal structure preserves the overall extent and connectivity of the network, with a central line that follows the centreline of the combined buffered area.
@@ -374,6 +385,37 @@ except AttributeError:
 
 <!-- ::: -->
 
+```{python}
+import rasterio.features as rif
+from skimage.morphology import remove_small_holes, skeletonize
+import rasterio.plot as rip
+
+r_matrix_otley, s_matrix_otley, out_shape_otley = get_affine_transform(otley_geometry, scale=2.0)
+# For Armle
+r_matrix_armley, s_matrix_armley, out_shape_armley = get_affine_transform(armley_geometry, scale=2.0)
+```
+
+::: {#fig-rasterize layout-ncol="2"}
+```{python}
+otley_im = rif.rasterize(otley_segment.values, transform=r_matrix_otley, out_shape=out_shape_otley)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    otley_im = remove_small_holes(otley_im, 20).astype(np.uint8)
+
+rip.show(otley_im, cmap="Greys", title="buffer geometry")
+```
+
+```{python}
+armley_im = rif.rasterize(armley_segment.values, transform=r_matrix_armley, out_shape=out_shape_otley)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    armley_im = remove_small_holes(armley_im, 20).astype(np.uint8)
+rip.show(armley_im, cmap="Greys", title="buffer geometry")
+```
+
+Rasterized versions of the Otley Road (left) and Armley Road (right) networks, with post processing to remove small holes.
+:::
+
 To mitigate rasterisation artefacts introduced by this step, we increase resolution via a uniform affine scale before thinning.
 As detail is lost in transforming of the geometry to an image buffer or raster, more detail can be retained by using an affine transformation to increase the number of points in the buffer prior to skeletonisation and reducing scale when creating the simplified linear geometric representation.
 This scale operation is a uniform affine scale transformation applied to increase the detail contained in the raster image.
@@ -463,56 +505,40 @@ armley_transform = armley_point.map(shapely_transform).map(set_precision_pointon
 # plt.show()
 ```
 
-```{=html}
-<!-- Skeletonised versions of the Otley Road (left) and Armley Road (right) networks, transformed back into point geometry.
-
-::: -->
-```
-
 After thinning, we convert the skeleton back to vectors by connecting adjacent pixels into segments and merging them into continuous lines.
 Line segments are then created by connecting these adjacent points.
-These segments are combined, giving a continuous line geometry representing the simplified network.
-Finally, a reverse scaling affine transformation is applied to return to the original coordinate system.
-<!-- This conversion from point to line geometry is a pivotal aspect of network simplification. -->
-
-Among these stages, the point-to-line reconstruction is the most complex.
-
-<!-- The resulting simplified network is illustrated in @fig-skeleton-line. -->
 
 ```{python}
 otley_line = get_raster_line(otley_point, True)
 armley_line = get_raster_line(armley_point, True)
 ```
 
-<!-- ::: {#fig-skeleton-line layout-ncol="2"} -->
-
+::: {#fig-skeleton-line layout-ncol="2"}
 ```{python}
 shapely_transform = partial(affine_transform, matrix=s_matrix_otley)
 otley_sk = otley_line.map(shapely_transform).map(set_precision_pointone)
 otley_sk = otley_sk.set_crs(CRS)
-# otley_sk.plot()
+otley_sk.plot()
 ```
 
 ```{python}
 shapely_transform = partial(affine_transform, matrix=s_matrix_armley)
 armley_sk = armley_line.map(shapely_transform).map(set_precision_pointone)
 armley_sk = armley_sk.set_crs(CRS)
-# armley_sk.plot()
+armley_sk.plot()
 ```
+Simplified versions of the Otley Road (left) and Armley Road (right) networks, transformed back into line geometry.
+:::
 
-<!-- Simplified versions of the Otley Road (left) and Armley Road (right) networks, transformed back into line geometry. -->
-
-<!-- ::: -->
+These segments are combined, giving a continuous line geometry representing the simplified network.
+Finally, a reverse scaling affine transformation is applied to return to the original coordinate system. Among these stages,
+the point-to-line reconstruction is the most complex.
 
 ## Simplification via Voronoi polygons {#sec-simplification-via-voronoi-polygons}
 
 In contrast to skeletonisation, the Voronoi method remains in vector space until the end and derives centrelines from buffered boundaries.
 Voronoi simplification takes the buffered network segments and converts them into a set of points.
 The edges of these buffers are then segmented into sequences of points.
-From these sequences, a centreline is derived based on a set of Voronoi polygons that cover these points.
-For more detail on segmentation and Voronoi simplification see the [Appendix](https://nptscot.github.io/networkmerge/methods.html#sec-simplification-via-voronoi-polygons).
-This approach facilitates the creation of a simplified network representation by focusing on the central alignment of the buffered lines.
-For examples of the resulting outputs, see the “Voronoi” column of @fig-skeleton-line (Otley: top row; Armley: bottom row).
 
 ```{python}
 scale = 10.0
@@ -566,29 +592,31 @@ armley_segment = get_segment_nx(armley_boundary, scale).reset_index(drop=True)
 
 <!-- This transformation is essential for the creation of Voronoi diagrams. -->
 
-<!-- ::: {#fig-voronoi-point layout-ncol="2"} -->
+::: {#fig-voronoi-point layout-ncol="2"}
 
 ```{python}
 otley_point = otley_segment.loc[:, "geometry"].map(get_coordinates).explode()
 otley_point = MultiPoint(otley_point[::2].map(Point).values)
 nx_output = gp.GeoSeries(otley_point, crs=CRS)
-# ax = nx_output.clip(otley_clip).plot(edgecolor="blue", color="white")
-# ax.xaxis.set_ticklabels([])
-# ax.yaxis.set_ticklabels([])
+ax = nx_output.clip(otley_clip).plot(edgecolor="blue", color="white")
+_ = ax.xaxis.set_ticklabels([])
+_ = ax.yaxis.set_ticklabels([])
 ```
 
 ```{python}
 armley_point = armley_segment.loc[:, "geometry"].map(get_coordinates).explode()
 armley_point = MultiPoint(armley_point[::2].map(Point).values)
 nx_output = gp.GeoSeries(armley_point, crs=CRS)
-# ax = nx_output.clip(armley_clip).plot(edgecolor="blue", color="white")
-# ax.xaxis.set_ticklabels([])
-# ax.yaxis.set_ticklabels([])
+ax = nx_output.clip(armley_clip).plot(edgecolor="blue", color="white")
+_ = ax.xaxis.set_ticklabels([])
+_ = ax.yaxis.set_ticklabels([])
 ```
 
-<!-- Detail point segement of the Otley Road (left) and Armley Road (right) networks. -->
+Detail point segement of the Otley Road (left) and Armley Road (right) networks.
 
-<!-- ::: -->
+:::
+
+From these sequences, a centreline is derived based on a set of Voronoi polygons that cover these points.
 
 ```{python}
 shapely_transform = partial(affine_transform, matrix=s_matrix_armley)
@@ -631,34 +659,38 @@ armley_voronoi = gp.GeoSeries(map(set_precision_pointone, armley_voronoi.geoms),
 
 <!-- ### Voronoi 2 -->
 
-<!-- ::: {#fig-voronoi-2 layout-ncol="2"} -->
+::: {#fig-voronoi-2 layout-ncol="2"}
 
 ```{python}
 otley_voronoi = otley_voronoi.explode(index_parts=False).clip(otley_envelope)
 ix = ~otley_voronoi.is_empty & (otley_voronoi.type == "LineString")
 otley_voronoi = otley_voronoi[ix].reset_index(drop=True)
-# ax = otley_voronoi.plot()
-# ax.xaxis.set_ticklabels([])
-# ax.yaxis.set_ticklabels([])
+ax = otley_voronoi.plot()
+_ = ax.xaxis.set_ticklabels([])
+_ = ax.yaxis.set_ticklabels([])
 ```
 
 ```{python}
 armley_voronoi = armley_voronoi.explode(index_parts=False).clip(armley_envelope)
 ix = ~armley_voronoi.is_empty & (armley_voronoi.type == "LineString")
 armley_voronoi = armley_voronoi[ix].reset_index(drop=True)
-# ax = armley_voronoi.plot()
-# ax.xaxis.set_ticklabels([])
-# ax.yaxis.set_ticklabels([])
+ax = armley_voronoi.plot()
+_ = ax.xaxis.set_ticklabels([])
+_ = ax.yaxis.set_ticklabels([])
 ```
 
-<!-- Clipped Voronoi diagrams of the Otley Road (left) and Armley Road (right) networks. -->
+Clipped Voronoi diagrams of the Otley Road (left) and Armley Road (right) networks.
 
-<!-- ::: -->
+:::
 
 <!-- ### Voronoi simplified network -->
 
 From the Voronoi diagram, we retain only edges entirely within the buffer and within half a buffer width of the boundary.
 The final centreline is then cleaned by removing knot-like artefacts, which tend to be more prevalent in Voronoi outputs.
+For more detail on segmentation and Voronoi simplification see [Methods](https://nptscot.github.io/networkmerge/methods.html#sec-simplification-via-voronoi-polygons).
+
+This approach facilitates the creation of a simplified network representation by focusing on the central alignment of the buffered lines.
+For examples of the resulting outputs, see the “Voronoi” column of @fig-skeleton-line (Otley: top row; Armley: bottom row).
 
 <!-- ::: {#fig-voronoi-simplified layout-ncol="2"} -->
 
@@ -1430,10 +1462,6 @@ m2 = tm_shape(rnet_merged) +
      tm_lines("value", palette = "viridis", lwd = 5, breaks = brks) +
      tm_scale_bar() +
      tm_layout(frame = FALSE, inner.margins = 0, outer.margins = 0, asp = 0)
-
-
-
-
 
 # Arrange the two maps vertically with a tight layout and synchronization
 tmap_arrange(m1, m2, nrow = 2, sync = TRUE)
